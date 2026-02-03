@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #000000;
+  --secondary: #f4f4f5;
+  /* Zinc-100 */
+  --secondary-foreground: #18181b;
+  /* Zinc-900 */
+  --border: #e4e4e7;
+  /* Zinc-200 */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #000000;
+    --foreground: #ffffff;
+    --secondary: #18181b;
+    /* Zinc-900 */
+    --secondary-foreground: #f4f4f5;
+    /* Zinc-100 */
+    --border: #27272a;
+    /* Zinc-800 */
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geek-sans), sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Minimal Utilities */
+.minimal-card {
+  background: var(--background);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+}
+
+.minimal-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.dark .minimal-card:hover {
+  box-shadow: 0 4px 6px -1px rgba(255, 255, 255, 0.1), 0 2px 4px -1px rgba(255, 255, 255, 0.06);
+}
+
+.minimal-input {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--foreground);
+}
+
+.minimal-input:focus {
+  outline: 2px solid var(--foreground);
+  border-color: transparent;
+}
+
+.minimal-button {
+  background: var(--foreground);
+  color: var(--background);
+  font-weight: 500;
+}
+
+.minimal-button:hover {
+  opacity: 0.9;
+}
+
+.minimal-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
