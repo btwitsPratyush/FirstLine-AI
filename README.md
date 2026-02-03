@@ -7,69 +7,51 @@
 
 ---
 
-## Architecture & flow
+## Architecture
 
-### High-level flow
+### System overview
 
-```mermaid
-flowchart LR
-  subgraph User
-    A[Browser]
-    B[Phone]
-  end
-  subgraph Frontend["Frontend (Next.js)"]
-    C[Scenario + Phone]
-    D[/api/outbound-call]
-    E[/api/analysis]
-  end
-  subgraph Outbound["Outbound (Fastify)"]
-    F[Twilio]
-    G[ElevenLabs]
-    H[OpenAI]
-  end
-  A --> C
-  C --> D
-  D --> F
-  F --> B
-  B <--> F
-  F <--> G
-  F --> H
-  H --> E
-  E --> A
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              USER (Browser + Phone)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+    │                                    │
+    │  Select scenario, enter phone       │  Receives call, talks to AI caller
+    │  Click "Start Training"             │  Gets feedback on screen after call
+    ▼                                    ▲
+┌───────────────────────┐         ┌─────┴──────────────────────────────────────┐
+│   FRONTEND (Next.js)   │         │         OUTBOUND (Fastify)                 │
+│   localhost:3000       │         │         localhost:8000                      │
+│                       │  POST   │                                            │
+│  • Scenario list       │ ──────► │  • Twilio: create call, stream audio       │
+│  • Country + phone     │/outbound│  • ElevenLabs: AI voice + transcripts      │
+│  • POST /api/outbound  │ -call   │  • OpenAI: grade transcript                 │
+│  • GET/POST /api/      │         │  • POST analysis back to frontend           │
+│    analysis            │ ◄──────│                                            │
+└───────────────────────┘  POST   └──────────────────┬─────────────────────────┘
+                            /api/                    │
+                            analysis                 │ Twilio Media (WebSocket)
+                                                     │
+                              ┌──────────────────────┼──────────────────────┐
+                              ▼                      ▼                      ▼
+                        ┌──────────┐          ┌─────────────┐          ┌──────────┐
+                        │ Twilio   │          │ ElevenLabs  │          │ OpenAI   │
+                        │ (calls)  │          │ (AI voice)  │          │ (grade)  │
+                        └──────────┘          └─────────────┘          └──────────┘
 ```
 
-### End-to-end sequence
+### Call flow (step by step)
 
-```mermaid
-sequenceDiagram
-  participant U as User (browser + phone)
-  participant F as Frontend
-  participant O as Outbound
-  participant T as Twilio
-  participant E as ElevenLabs
-  participant AI as OpenAI
-
-  U->>F: Select scenario + phone, Start Training
-  F->>O: POST /outbound-call (number, prompt, first_message, scenarioId)
-  O->>T: Create outbound call
-  T->>U: Ring phone
-  U->>T: Answer
-  T->>O: Request TwiML
-  O->>T: Connect WebSocket stream
-  T->>O: Audio stream (bidirectional)
-  O->>E: WebSocket (prompt, first_message)
-  E->>O: AI voice + transcripts
-  O->>T: AI audio to user
-  Note over U,E: Live conversation
-  U->>T: Hang up
-  T->>O: Stream stop
-  O->>AI: Grade transcript
-  AI->>O: Analysis JSON
-  O->>F: POST /api/analysis (scenarioId + analysis)
-  F->>F: Store analysis
-  U->>F: Poll GET /api/analysis?id=
-  F->>U: Show feedback (pass/fail, strengths, improvements)
-```
+1. **User** → Frontend: picks scenario, enters phone number, clicks **Start Training**.
+2. **Frontend** → Outbound: `POST /outbound-call` with `number`, `prompt`, `first_message`, `scenarioId`.
+3. **Outbound** → Twilio: create outbound call. Twilio rings the user’s phone.
+4. **User** answers → Twilio connects media stream (WebSocket) to Outbound.
+5. **Outbound** ↔ **ElevenLabs**: sends prompt + first message; receives AI voice + transcripts. Outbound streams AI audio back through Twilio to the user.
+6. **User** and **AI caller** talk (two-way voice).
+7. Call ends → Twilio sends stream stop to Outbound.
+8. **Outbound** → **OpenAI**: sends transcript, gets back graded JSON (score, pass/fail, strengths, improvements).
+9. **Outbound** → Frontend: `POST /api/analysis` with `scenarioId` and analysis.
+10. **Frontend** stores result; UI polls `GET /api/analysis?id=<scenarioId>` and shows feedback.
 
 ### Components
 
@@ -80,16 +62,6 @@ sequenceDiagram
 | **Twilio** | Dials user, streams audio to/from outbound service |
 | **ElevenLabs** | Conversational AI: plays “caller” voice, returns transcripts |
 | **OpenAI** | Grades transcript → JSON (score, strengths, improvements, pass/fail) |
-
-### Data flow (summary)
-
-1. **Browser → Frontend** — User selects scenario, enters phone (with country code), clicks Start Training.
-2. **Frontend → Outbound** — `POST /outbound-call` with `number`, `prompt`, `first_message`, `scenarioId`.
-3. **Outbound → Twilio** — Create outbound call; Twilio requests TwiML, then opens WebSocket to outbound.
-4. **Twilio ↔ Outbound** — Bidirectional audio stream.
-5. **Outbound ↔ ElevenLabs** — Same conversation: ElevenLabs gets prompt + first message, returns AI voice + transcripts.
-6. **Call end** — Outbound builds transcript, calls OpenAI to grade, then `POST /api/analysis` to frontend (with `scenarioId`).
-7. **Frontend** — Saves analysis, UI polls `GET /api/analysis?id=<scenarioId>` and shows feedback.
 
 ---
 
