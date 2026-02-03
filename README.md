@@ -9,7 +9,69 @@
 
 ## Architecture
 
-### System overview
+### High-level flow
+
+```mermaid
+flowchart LR
+  subgraph User
+    A[Browser]
+    B[Phone]
+  end
+  subgraph Frontend["Frontend (Next.js)"]
+    C[Scenario + Phone]
+    D[api outbound-call]
+    E[api analysis]
+  end
+  subgraph Outbound["Outbound (Fastify)"]
+    F[Twilio]
+    G[ElevenLabs]
+    H[OpenAI]
+  end
+  A --> C
+  C --> D
+  D --> F
+  F --> B
+  B <--> F
+  F <--> G
+  F --> H
+  H --> E
+  E --> A
+```
+
+### End-to-end sequence
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant F as Frontend
+  participant O as Outbound
+  participant T as Twilio
+  participant E as ElevenLabs
+  participant AI as OpenAI
+
+  U->>F: Select scenario + phone, Start Training
+  F->>O: POST outbound-call
+  O->>T: Create outbound call
+  T->>U: Ring phone
+  U->>T: Answer
+  T->>O: Request TwiML
+  O->>T: WebSocket stream
+  T->>O: Audio bidirectional
+  O->>E: WebSocket prompt + first_message
+  E->>O: AI voice + transcripts
+  O->>T: AI audio to user
+  Note over U,E: Live conversation
+  U->>T: Hang up
+  T->>O: Stream stop
+  O->>AI: Grade transcript
+  AI->>O: Analysis JSON
+  O->>F: POST api/analysis
+  F->>F: Store analysis
+  U->>F: Poll GET api/analysis
+  F->>U: Show feedback
+```
+
+### System overview (text)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -21,23 +83,23 @@
     ▼                                    ▲
 ┌───────────────────────┐         ┌─────┴──────────────────────────────────────┐
 │   FRONTEND (Next.js)   │         │         OUTBOUND (Fastify)                 │
-│   localhost:3000       │         │         localhost:8000                      │
+│   localhost:3000      │         │         localhost:8000                      │
 │                       │  POST   │                                            │
-│  • Scenario list       │ ──────► │  • Twilio: create call, stream audio       │
-│  • Country + phone     │/outbound│  • ElevenLabs: AI voice + transcripts      │
-│  • POST /api/outbound  │ -call   │  • OpenAI: grade transcript                 │
-│  • GET/POST /api/      │         │  • POST analysis back to frontend           │
-│    analysis            │ ◄──────│                                            │
+│  • Scenario list      │ ──────► │  • Twilio: create call, stream audio        │
+│  • Country + phone    │/outbound│  • ElevenLabs: AI voice + transcripts       │
+│  • POST /api/outbound │ -call   │  • OpenAI: grade transcript                  │
+│  • GET/POST /api/     │         │  • POST analysis back to frontend          │
+│    analysis           │ ◄────── │                                            │
 └───────────────────────┘  POST   └──────────────────┬─────────────────────────┘
-                            /api/                    │
-                            analysis                 │ Twilio Media (WebSocket)
-                                                     │
-                              ┌──────────────────────┼──────────────────────┐
-                              ▼                      ▼                      ▼
-                        ┌──────────┐          ┌─────────────┐          ┌──────────┐
-                        │ Twilio   │          │ ElevenLabs  │          │ OpenAI   │
-                        │ (calls)  │          │ (AI voice)  │          │ (grade)  │
-                        └──────────┘          └─────────────┘          └──────────┘
+                            /api/                     │
+                            analysis                  │ Twilio Media (WebSocket)
+                                                      │
+                              ┌───────────────────────┼───────────────────────┐
+                              ▼                       ▼                       ▼
+                        ┌──────────┐           ┌─────────────┐           ┌──────────┐
+                        │ Twilio   │           │ ElevenLabs │           │ OpenAI   │
+                        │ (calls)  │           │ (AI voice) │           │ (grade)  │
+                        └──────────┘           └─────────────┘           └──────────┘
 ```
 
 ### Call flow (step by step)
