@@ -7,6 +7,22 @@
 
 ---
 
+## Screenshots
+
+### UI — Training flow
+
+Phone number entry (country code + E.164), success state, and scenario selection with status (e.g. *in call*, *to be completed*).
+
+![FirstLine AI — Emergency Response Training UI](assets/ui-screenshot.png)
+
+### Console — Live call and analysis
+
+Outbound service log: ElevenLabs connection, Twilio agent/user transcript (distressed caller, location, confirmation), stream end, and post-call analysis (scenario identified, message count).
+
+![FirstLine AI — Console: call transcript and analysis](assets/console-output.png)
+
+---
+
 ## Architecture
 
 ### High-level flow
