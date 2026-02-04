@@ -1,27 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #000000;
-  --secondary: #f4f4f5;
-  /* Zinc-100 */
-  --secondary-foreground: #18181b;
-  /* Zinc-900 */
-  --border: #e4e4e7;
-  /* Zinc-200 */
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #000000;
-    --foreground: #ffffff;
-    --secondary: #18181b;
-    /* Zinc-900 */
-    --secondary-foreground: #f4f4f5;
-    /* Zinc-100 */
-    --border: #27272a;
-    /* Zinc-800 */
-  }
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --secondary: #18181b;
+  --secondary-foreground: #f4f4f5;
+  --border: #27272a;
+  --accent: #3b82f6;
+  --accent-light: #60a5fa;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
 }
 
 body {
@@ -30,39 +19,42 @@ body {
   font-family: var(--font-geek-sans), sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
 }
 
-/* Minimal Utilities */
+/* Card - flat, no glass */
 .minimal-card {
-  background: var(--background);
+  background: var(--secondary);
   border: 1px solid var(--border);
-  transition: all 0.2s ease;
+  border-radius: 12px;
+  transition: border-color 0.2s ease;
 }
 
 .minimal-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
-.dark .minimal-card:hover {
-  box-shadow: 0 4px 6px -1px rgba(255, 255, 255, 0.1), 0 2px 4px -1px rgba(255, 255, 255, 0.06);
-}
-
+/* Input */
 .minimal-input {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border);
   color: var(--foreground);
+  border-radius: 8px;
+  transition: border-color 0.2s ease;
 }
 
 .minimal-input:focus {
-  outline: 2px solid var(--foreground);
-  border-color: transparent;
+  outline: none;
+  border-color: var(--accent);
 }
 
+/* Button - solid colour */
 .minimal-button {
-  background: var(--foreground);
-  color: var(--background);
-  font-weight: 500;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  border-radius: 8px;
+  transition: opacity 0.2s ease;
 }
 
 .minimal-button:hover {
@@ -72,4 +64,73 @@ body {
 .minimal-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Status Badge - solid colours */
+.status-passed {
+  background: var(--success);
+  color: white;
+}
+
+.status-failed {
+  background: var(--error);
+  color: white;
+}
+
+.status-in-call {
+  background: var(--warning);
+  color: #1a1a1a;
+}
+
+.status-pending {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Scenario Number Circle - zinc (not blue) */
+.scenario-number {
+  background: #52525b; /* zinc-600 */
+  color: white;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.25rem;
+}
+
+/* Panel - flat */
+.glass-panel {
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+/* In-call animation */
+.in-call-indicator {
+  animation: in-call-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes in-call-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Results panel - solid tints */
+.results-panel {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 8px;
+}
+
+.results-panel.failed {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
 }

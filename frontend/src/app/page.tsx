@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Footer } from "./components/Footer";
 
 // Country codes with flags
@@ -147,6 +147,9 @@ export default function Home() {
   const [selectedCountry, setSelectedCountry] = useState(countries[1]); // Default to UK (+44)
   const [isCountryDropdownOpen, setIsCountryDropdownOpen] = useState(false);
   const [countrySearch, setCountrySearch] = useState("");
+  const [highlightedCountryIndex, setHighlightedCountryIndex] = useState(0);
+  const countryListRef = useRef<HTMLDivElement>(null);
+  const highlightedOptionRef = useRef<HTMLButtonElement | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
@@ -169,12 +172,88 @@ export default function Home() {
     setLastPollTime(Date.now());
   }, []);
 
+  // Filtered countries for search and keyboard nav
+  const filteredCountries = useMemo(() => {
+    const search = countrySearch.toLowerCase().trim();
+    if (!search) return countries;
+    return countries.filter(
+      (c) =>
+        c.name.toLowerCase().includes(search) ||
+        c.code.includes(search) ||
+        c.code.replace(/\D/g, "").includes(search)
+    );
+  }, [countrySearch]);
+
+  // When dropdown opens, set highlighted index to selected country (or 0)
+  useEffect(() => {
+    if (isCountryDropdownOpen) {
+      const idx = filteredCountries.findIndex((c) => c.code === selectedCountry.code);
+      setHighlightedCountryIndex(idx >= 0 ? idx : 0);
+    }
+  }, [isCountryDropdownOpen, selectedCountry.code, filteredCountries]);
+
+  // Clamp highlighted index when filtered list shrinks (e.g. after search)
+  useEffect(() => {
+    if (isCountryDropdownOpen && filteredCountries.length > 0) {
+      setHighlightedCountryIndex((i) => Math.min(i, filteredCountries.length - 1));
+    }
+  }, [isCountryDropdownOpen, filteredCountries.length]);
+
+  // Scroll highlighted option into view
+  useEffect(() => {
+    if (isCountryDropdownOpen && highlightedOptionRef.current) {
+      highlightedOptionRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [isCountryDropdownOpen, highlightedCountryIndex]);
+
+  // Keyboard: ArrowUp, ArrowDown, Enter, Escape when dropdown is open
+  useEffect(() => {
+    if (!isCountryDropdownOpen) return;
+    const len = filteredCountries.length;
+    if (len === 0) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isSearchFocused = target.getAttribute("data-country-search") === "true";
+      if (isSearchFocused && e.key !== "Escape" && e.key !== "Enter" && e.key !== "ArrowDown" && e.key !== "ArrowUp") {
+        return;
+      }
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setHighlightedCountryIndex((i) => (i + 1) % len);
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setHighlightedCountryIndex((i) => (i - 1 + len) % len);
+          break;
+        case "Enter":
+          e.preventDefault();
+          setSelectedCountry(filteredCountries[highlightedCountryIndex]);
+          setIsCountryDropdownOpen(false);
+          setCountrySearch("");
+          break;
+        case "Escape":
+          e.preventDefault();
+          setIsCountryDropdownOpen(false);
+          setCountrySearch("");
+          break;
+        default:
+          break;
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isCountryDropdownOpen, filteredCountries, highlightedCountryIndex]);
+
   // Close country dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (isCountryDropdownOpen) {
         const target = event.target as HTMLElement;
-        if (!target.closest('.country-selector-container')) {
+        if (!target.closest(".country-selector-container")) {
           setIsCountryDropdownOpen(false);
           setCountrySearch("");
         }
@@ -182,9 +261,9 @@ export default function Home() {
     };
 
     if (isCountryDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener("mousedown", handleClickOutside);
       return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener("mousedown", handleClickOutside);
       };
     }
   }, [isCountryDropdownOpen]);
@@ -441,8 +520,9 @@ export default function Home() {
         try {
           const errJson = JSON.parse(errorText);
           if (errJson?.error === "Failed to initiate call") {
+            const detail = errJson?.detail ? ` (${errJson.detail})` : "";
             userMessage =
-              "Call could not be started. Check: (1) Outbound service is running (node outbound.js), (2) Twilio number and credentials in outbound/.env, (3) On Twilio trial, add this number in Console → Verified Caller IDs.";
+              "Call could not be started." + detail + " Check: (1) Outbound service is running (node outbound.js), (2) Twilio number and credentials in outbound/.env, (3) On Twilio trial, add this number in Console → Verified Caller IDs.";
           } else if (errJson?.error === "API URL configuration is missing") {
             userMessage =
               "Frontend is not configured. Set OUTBOUND_CALL_API_URL in frontend/.env.local (e.g. http://localhost:8000).";
@@ -485,15 +565,15 @@ export default function Home() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "passed":
-        return "bg-black text-white dark:bg-white dark:text-black";
+        return "status-passed";
       case "failed":
-        return "bg-transparent border-2 border-black text-black dark:border-white dark:text-white";
+        return "status-failed";
       case "in call":
-        return "bg-gray-200 text-black dark:bg-gray-800 dark:text-white animate-pulse";
+        return "status-in-call";
       case "to be completed":
-        return "bg-gray-100 border-2 border-gray-400 text-gray-700 dark:bg-gray-900 dark:border-gray-500 dark:text-gray-300";
+        return "status-pending";
       default:
-        return "bg-gray-100 border-2 border-gray-400 text-gray-700 dark:bg-gray-900 dark:border-gray-500 dark:text-gray-300";
+        return "status-pending";
     }
   };
 
@@ -524,7 +604,7 @@ export default function Home() {
         </div>
         <p>Poll: {formatTime(lastPollTime)}</p>
         <p className="truncate">
-          Status: {scenarios.map((s) => `${s.id}:${s.status}`).join(", ")}
+          Status: {(Array.isArray(scenarios) ? scenarios : []).map((s) => `${s.id}:${s.status}`).join(", ")}
         </p>
         <p>Selected: {selectedScenario}</p>
         <p>Analysis: {Object.keys(analysisResults).length}</p>
@@ -533,31 +613,44 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen p-8 flex flex-col gap-12">
+    <div className="min-h-screen p-6 md:p-8 flex flex-col gap-8">
       {/* Debug panel */}
       {renderDebugInfo()}
 
-      {/* Header with FirstPulse title */}
-      <header className="w-full text-center mb-16">
-        <h1 className="text-5xl font-bold text-black dark:text-white mb-4 tracking-tight">
-          FirstLine AI
+      {/* Header */}
+      <header className="w-full text-center pt-12 pb-8">
+        <h1 className="text-[2.75rem] md:text-6xl font-bold text-white tracking-tight">
+          <span className="tracking-tight">FirstLine</span>
+          <span className="ml-2 inline-block rounded bg-zinc-700 px-2 py-0.5 text-2xl md:text-4xl font-bold tracking-[0.15em] text-zinc-200 uppercase">
+            AI
+          </span>
         </h1>
-        <p className="text-xl text-gray-600 dark:text-gray-400 font-light max-w-2xl mx-auto">
-          Advanced AI-Powered Emergency Response Training
+        <div className="mt-4 w-16 h-px bg-zinc-600 mx-auto" aria-hidden="true" />
+        <p className="mt-4 text-xs uppercase tracking-[0.25em] text-zinc-500">
+          Emergency Response Training
         </p>
       </header>
 
       {/* Phone Number Section */}
-      <section className="w-full max-w-lg mx-auto mt-4">
-        <div className="bg-white dark:bg-black p-8 rounded-xl shadow-none border border-gray-200 dark:border-gray-800">
-          <h2 className="text-2xl font-semibold mb-6 text-center">Authentication</h2>
+      <section className="w-full max-w-lg mx-auto">
+        <div className="glass-panel p-8">
+          <h2 className="text-xl font-semibold mb-6 text-center text-white/90">Enter Your Phone Number</h2>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="relative flex">
               {/* Country Code Selector */}
               <div className="relative country-selector-container">
                 <button
                   type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded={isCountryDropdownOpen}
+                  aria-label="Country code"
                   onClick={() => setIsCountryDropdownOpen(!isCountryDropdownOpen)}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      if (!isCountryDropdownOpen) setIsCountryDropdownOpen(true);
+                    }
+                  }}
                   className="flex items-center gap-2 px-4 py-4 rounded-l-xl border border-r-0 border-gray-300 bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:border-gray-700 dark:hover:bg-gray-800 transition-colors focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 >
                   <span className="text-xl">{selectedCountry.flag}</span>
@@ -588,9 +681,15 @@ export default function Home() {
                       className="fixed inset-0 z-10"
                       onClick={() => setIsCountryDropdownOpen(false)}
                     ></div>
-                    <div className="absolute top-full left-0 mt-1 w-64 max-h-80 overflow-y-auto bg-white dark:bg-black border border-gray-300 dark:border-gray-700 rounded-xl shadow-lg z-20">
-                      <div className="p-2">
+                    <div
+                      ref={countryListRef}
+                      role="listbox"
+                      aria-label="Country list"
+                      className="absolute top-full left-0 mt-1 w-64 max-h-80 overflow-y-auto bg-white dark:bg-black border border-gray-300 dark:border-gray-700 rounded-xl shadow-lg z-20"
+                    >
+                      <div className="p-2 sticky top-0 bg-inherit">
                         <input
+                          data-country-search="true"
                           type="text"
                           placeholder="Search country..."
                           value={countrySearch}
@@ -598,41 +697,39 @@ export default function Home() {
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => setCountrySearch(e.target.value)}
                         />
-                        <div className="max-h-64 overflow-y-auto">
-                          {countries
-                            .filter((country) => {
-                              const search = countrySearch.toLowerCase();
-                              return (
-                                country.name.toLowerCase().includes(search) ||
-                                country.code.includes(search) ||
-                                country.flag.includes(search)
-                              );
-                            })
-                            .map((country) => (
+                      </div>
+                      <div className="max-h-64 overflow-y-auto pb-2">
+                        {filteredCountries.length === 0 ? (
+                          <p className="px-3 py-2 text-sm text-gray-500">No countries match</p>
+                        ) : (
+                          filteredCountries.map((country, index) => (
                             <button
                               key={country.code}
+                              ref={index === highlightedCountryIndex ? highlightedOptionRef : null}
+                              role="option"
+                              aria-selected={index === highlightedCountryIndex}
                               type="button"
                               onClick={() => {
                                 setSelectedCountry(country);
                                 setIsCountryDropdownOpen(false);
                                 setCountrySearch("");
                               }}
-                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-left ${
-                                selectedCountry.code === country.code
-                                  ? "bg-gray-100 dark:bg-gray-800"
-                                  : ""
-                              }`}
+                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
+                                index === highlightedCountryIndex
+                                  ? "bg-blue-100 dark:bg-blue-900/40 text-blue-900 dark:text-blue-100"
+                                  : "hover:bg-gray-100 dark:hover:bg-gray-800"
+                              } ${selectedCountry.code === country.code ? "font-medium" : ""}`}
                             >
                               <span className="text-xl">{country.flag}</span>
-                              <span className="flex-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+                              <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">
                                 {country.name}
                               </span>
                               <span className="text-xs text-gray-500 dark:text-gray-400">
                                 {country.code}
                               </span>
                             </button>
-                            ))}
-                        </div>
+                          ))
+                        )}
                       </div>
                     </div>
                   </>
@@ -725,72 +822,83 @@ export default function Home() {
       </section>
 
       {/* Training Scenarios Section */}
-      <section className="w-full max-w-7xl mx-auto mt-8 mb-16 relative z-10">
-        <h2 className="text-3xl font-bold mb-10 text-center text-black dark:text-white">
-          Training Scenarios
+      <section className="w-full max-w-7xl mx-auto mt-4 mb-16 relative z-10">
+        <h2 className="text-2xl font-bold mb-8 text-center text-white/90">
+          Select Training Scenario
         </h2>
-        <div className="flex flex-col md:flex-row gap-4 relative">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {Array.isArray(scenarios)
             ? scenarios.map((scenario, index) => (
-              <React.Fragment key={scenario.id}>
+              <div key={scenario.id} className="relative">
                 {/* Scenario Box */}
-                <div className="flex-1 relative">
-                  <div
-                    className={`minimal-card p-6 rounded-lg cursor-pointer ${selectedScenario === scenario.id
-                      ? "border-black border-2 bg-zinc-50 dark:bg-zinc-900"
-                      : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                      }`}
-                    onClick={() => handleScenarioClick(scenario.id)}
-                  >
-                    {/* Step Number */}
-                    <div className="bg-black dark:bg-white text-white dark:text-black w-10 h-10 rounded-full flex items-center justify-center font-bold mb-4">
+                <div
+                  className={`minimal-card p-6 cursor-pointer h-full ${selectedScenario === scenario.id
+                    ? "border-blue-500/50 bg-blue-500/5"
+                    : ""
+                    }`}
+                  onClick={() => handleScenarioClick(scenario.id)}
+                >
+                  {/* Header with number and status */}
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="scenario-number">
                       {index + 1}
                     </div>
-
-                    {/* Status Badge */}
                     <div
-                      className={`absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold ${getStatusColor(
                         scenario.status
                       )}`}
                     >
+                      {scenario.status === "in call" && (
+                        <span className="inline-block w-2 h-2 bg-current rounded-full mr-1.5 in-call-indicator"></span>
+                      )}
                       {scenario.status}
-                    </div>
-
-                    <h3 className="text-xl font-semibold mb-2">
-                      {scenario.name}
-                    </h3>
-                    <p className="text-gray-600 dark:text-gray-300">
-                      {scenario.description}
-                    </p>
-                    <div className="mt-4 flex justify-end">
-                      <span className="text-black dark:text-white text-sm underline underline-offset-4 decoration-gray-400 hover:decoration-black dark:hover:decoration-white transition-all">
-                        {selectedScenario === scenario.id
-                          ? "Hide Results"
-                          : "View Results"}
-                      </span>
                     </div>
                   </div>
 
-                  {/* Results panel that appears for all selected scenarios with detail for passed/failed */}
-                  {selectedScenario === scenario.id && (
-                    <div className="minimal-card border-t-0 p-6 rounded-b-lg mt-1 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-zinc-900/50">
-                      <h4 className="font-semibold mb-2">
-                        Current Status:{" "}
-                        <span className="font-mono">
-                          {scenario.status}
-                        </span>
-                      </h4>
+                  <h3 className="text-xl font-bold mb-2 text-white">
+                    {scenario.name}
+                  </h3>
+                  <p className="text-gray-400 text-sm leading-relaxed mb-4">
+                    {scenario.description}
+                  </p>
+                  
+                  <div className="flex items-center justify-between pt-4 border-t border-white/10">
+                    <span className={`text-sm font-medium ${selectedScenario === scenario.id ? "text-blue-400" : "text-gray-500"}`}>
+                      {selectedScenario === scenario.id ? "Selected" : "Click to select"}
+                    </span>
+                    <svg className={`w-5 h-5 transition-transform ${selectedScenario === scenario.id ? "rotate-90 text-blue-400" : "text-gray-500"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </div>
+                </div>
 
-                      {scenario.status === "in call" && (
-                        <div className="p-3 bg-yellow-100 rounded my-2">
-                          <p className="font-medium">Call in progress...</p>
-                          <p>
-                            The system is waiting for the call to complete and
-                            be analyzed. This status will update automatically
-                            when finished.
+                {/* Results panel that appears for all selected scenarios with detail for passed/failed */}
+                {selectedScenario === scenario.id && (
+                  <div className="mt-4 p-4 rounded-xl bg-white/5 border border-white/10">
+                    {scenario.status === "in call" && (
+                      <div className="flex items-center gap-3 p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                        <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <svg className="w-5 h-5 text-amber-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-amber-300">Call in Progress</p>
+                          <p className="text-sm text-amber-200/70">
+                            Waiting for call to complete. Results will appear automatically when you hang up.
+                          </p>
+                          <p className="text-xs text-amber-200/50 mt-1">
+                            If you already hung up, status will update within a minute.
                           </p>
                         </div>
-                      )}
+                      </div>
+                    )}
+
+                    {scenario.status === "to be completed" && (
+                      <div className="text-center py-4 text-gray-400">
+                        <p>Select this scenario and click Start Training to begin</p>
+                      </div>
+                    )}
 
                       {(scenario.status === "passed" ||
                         scenario.status === "failed") && (
@@ -808,17 +916,10 @@ export default function Home() {
                                 <div className="mb-3">
                                   <p className="font-medium">
                                     Overall Rating:{" "}
-                                    {
-                                      analysisResults[scenario.id]
-                                        .overall_rating.score
-                                    }
-                                    /10
+                                    {analysisResults[scenario.id]?.overall_rating?.score ?? "-"} /10
                                   </p>
                                   <p>
-                                    {
-                                      analysisResults[scenario.id]
-                                        .overall_rating.summary
-                                    }
+                                    {analysisResults[scenario.id]?.overall_rating?.summary ?? ""}
                                   </p>
                                 </div>
 
@@ -826,7 +927,7 @@ export default function Home() {
                                 <div className="mb-3">
                                   <p className="font-medium">Key Strengths:</p>
                                   <ul className="list-disc pl-5 mt-1">
-                                    {analysisResults[scenario.id].strengths.map(
+                                    {(analysisResults[scenario.id]?.strengths ?? []).map(
                                       (strength: string, i: number) => (
                                         <li key={i}>{strength}</li>
                                       )
@@ -840,9 +941,7 @@ export default function Home() {
                                     Areas for Improvement:
                                   </p>
                                   <ul className="list-disc pl-5 mt-1">
-                                    {analysisResults[
-                                      scenario.id
-                                    ].areas_for_improvement.map(
+                                    {(analysisResults[scenario.id]?.areas_for_improvement ?? []).map(
                                       (area: string, i: number) => (
                                         <li key={i}>{area}</li>
                                       )
@@ -861,9 +960,7 @@ export default function Home() {
                                         Gathered Correctly:
                                       </p>
                                       <ul className="list-disc pl-5">
-                                        {analysisResults[
-                                          scenario.id
-                                        ].information_handling.gathered_correctly.map(
+                                        {(analysisResults[scenario.id]?.information_handling?.gathered_correctly ?? []).map(
                                           (info: string, i: number) => (
                                             <li key={i}>{info}</li>
                                           )
@@ -875,9 +972,7 @@ export default function Home() {
                                         Missed or Incorrect:
                                       </p>
                                       <ul className="list-disc pl-5">
-                                        {analysisResults[
-                                          scenario.id
-                                        ].information_handling.missed_or_incorrect.map(
+                                        {(analysisResults[scenario.id]?.information_handling?.missed_or_incorrect ?? []).map(
                                           (info: string, i: number) => (
                                             <li key={i}>{info}</li>
                                           )
@@ -898,9 +993,7 @@ export default function Home() {
                                         Appropriate Actions:
                                       </p>
                                       <ul className="list-disc pl-5">
-                                        {analysisResults[
-                                          scenario.id
-                                        ].action_assessment.appropriate_actions.map(
+                                        {(analysisResults[scenario.id]?.action_assessment?.appropriate_actions ?? []).map(
                                           (action: string, i: number) => (
                                             <li key={i}>{action}</li>
                                           )
@@ -912,9 +1005,7 @@ export default function Home() {
                                         Inappropriate Actions:
                                       </p>
                                       <ul className="list-disc pl-5">
-                                        {analysisResults[
-                                          scenario.id
-                                        ].action_assessment.inappropriate_actions.map(
+                                        {(analysisResults[scenario.id]?.action_assessment?.inappropriate_actions ?? []).map(
                                           (action: string, i: number) => (
                                             <li key={i}>{action}</li>
                                           )
@@ -928,17 +1019,10 @@ export default function Home() {
                                 <div className="mb-3">
                                   <p className="font-medium">
                                     Response Efficiency:{" "}
-                                    {
-                                      analysisResults[scenario.id].efficiency
-                                        .response_time_rating
-                                    }
-                                    /10
+                                    {analysisResults[scenario.id]?.efficiency?.response_time_rating ?? "-"} /10
                                   </p>
                                   <p>
-                                    {
-                                      analysisResults[scenario.id].efficiency
-                                        .comments
-                                    }
+                                    {analysisResults[scenario.id]?.efficiency?.comments ?? ""}
                                   </p>
                                 </div>
 
@@ -948,23 +1032,18 @@ export default function Home() {
                                     Final Recommendation:
                                   </p>
                                   <p>
-                                    {
-                                      analysisResults[scenario.id]
-                                        .final_recommendation
-                                    }
+                                    {analysisResults[scenario.id]?.final_recommendation ?? ""}
                                   </p>
                                   <p className="mt-2 font-bold text-lg">
-                                    Status:
+                                    Status:{" "}
                                     <span
                                       className={
-                                        analysisResults[scenario.id]
-                                          .pass_fail === "PASS"
+                                        analysisResults[scenario.id]?.pass_fail === "PASS"
                                           ? "text-green-600"
                                           : "text-red-600"
                                       }
                                     >
-                                      {" "}
-                                      {analysisResults[scenario.id].pass_fail}
+                                      {analysisResults[scenario.id]?.pass_fail ?? "-"}
                                     </span>
                                   </p>
                                 </div>
@@ -972,17 +1051,9 @@ export default function Home() {
                             )}
                           </>
                         )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Connector Line (except after the last item) */}
-                {index < scenarios.length - 1 && (
-                  <div className="hidden md:block w-8 self-center">
-                    <div className="h-0.5 bg-gray-300 dark:bg-gray-700 w-full mt-6"></div>
                   </div>
                 )}
-              </React.Fragment>
+              </div>
             ))
             : null}
         </div>

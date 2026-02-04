@@ -47,6 +47,10 @@ fastify.register(fastifyWs);
 
 const PORT = process.env.PORT || 8000;
 
+// Public base URL for Twilio (required when using ngrok). No trailing slash.
+// e.g. https://abc123.ngrok.io
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL?.trim() || null;
+
 // Root route for health check
 fastify.get('/', async (_, reply) => {
   reply.send({ message: 'Server is running' });
@@ -60,11 +64,21 @@ const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
 });
 
+// Pick agent ID by scenario: 1=John (male), 2=Sarah (female), 3=Michael (male). Set in .env:
+// ELEVENLABS_AGENT_ID_1, ELEVENLABS_AGENT_ID_2, ELEVENLABS_AGENT_ID_3 (optional; else uses ELEVENLABS_AGENT_ID)
+function getAgentIdForScenario(scenarioId) {
+  const id = String(scenarioId || '').trim();
+  if (!id) return ELEVENLABS_AGENT_ID;
+  const perScenario = process.env[`ELEVENLABS_AGENT_ID_${id}`];
+  return perScenario && perScenario.trim() ? perScenario.trim() : ELEVENLABS_AGENT_ID;
+}
+
 // Helper function to get signed URL for authenticated conversations
-async function getSignedUrl() {
+async function getSignedUrl(agentId) {
+  const aid = agentId || ELEVENLABS_AGENT_ID;
   try {
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${ELEVENLABS_AGENT_ID}`,
+      `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${aid}`,
       {
         method: 'GET',
         headers: {
@@ -99,14 +113,17 @@ fastify.post('/outbound-call', async (request, reply) => {
     const scenarioIdParam =
       scenarioId !== undefined && scenarioId !== null ? String(scenarioId) : '';
 
+    const baseUrl = PUBLIC_BASE_URL || `https://${request.headers.host}`;
+    const twimlUrl = `${baseUrl}/outbound-call-twiml?prompt=${encodeURIComponent(
+      prompt
+    )}&first_message=${encodeURIComponent(first_message)}&scenarioId=${encodeURIComponent(
+      scenarioIdParam
+    )}`;
+
     const call = await twilioClient.calls.create({
       from: TWILIO_PHONE_NUMBER,
       to: number,
-      url: `https://${request.headers.host}/outbound-call-twiml?prompt=${encodeURIComponent(
-        prompt
-      )}&first_message=${encodeURIComponent(first_message)}&scenarioId=${encodeURIComponent(
-        scenarioIdParam
-      )}`,
+      url: twimlUrl,
     });
 
     reply.send({
@@ -115,10 +132,13 @@ fastify.post('/outbound-call', async (request, reply) => {
       callSid: call.sid,
     });
   } catch (error) {
-    console.error('Error initiating outbound call:', error);
+    const message = error?.message || error?.toString?.() || 'Unknown error';
+    console.error('Error initiating outbound call:', message);
+    if (error?.code) console.error('Twilio error code:', error.code);
     reply.code(500).send({
       success: false,
       error: 'Failed to initiate call',
+      detail: message,
     });
   }
 });
@@ -128,11 +148,13 @@ fastify.all('/outbound-call-twiml', async (request, reply) => {
   const prompt = request.query.prompt || '';
   const first_message = request.query.first_message || '';
   const scenarioId = request.query.scenarioId || '';
+  const baseUrl = PUBLIC_BASE_URL || request.headers.host;
+  const wsBase = baseUrl.replace(/^https?:\/\//, 'wss://');
 
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
-        <Stream url="wss://${request.headers.host}/outbound-media-stream">
+        <Stream url="${wsBase}/outbound-media-stream">
             <Parameter name="prompt" value="${prompt}" />
             <Parameter name="first_message" value="${first_message}" />
             <Parameter name="scenarioId" value="${scenarioId}" />
@@ -159,39 +181,33 @@ fastify.register(async (fastifyInstance) => {
     // Handle WebSocket errors
     ws.on('error', console.error);
 
-    // Set up ElevenLabs connection
+    // Set up ElevenLabs connection (agent/voice depends on scenario)
     const setupElevenLabs = async () => {
       try {
-        const signedUrl = await getSignedUrl();
+        const scenarioIdParam = customParameters?.scenarioId ?? '';
+        const agentId = getAgentIdForScenario(scenarioIdParam);
+        console.log(`[ElevenLabs] Using agent for scenario ${scenarioIdParam || 'default'}: ${agentId}`);
+        const signedUrl = await getSignedUrl(agentId);
         elevenLabsWs = new WebSocket(signedUrl);
 
         elevenLabsWs.on('open', () => {
           console.log('[ElevenLabs] Connected to Conversational AI');
 
-          // Send initial configuration with prompt and first message
+          // Send scenario prompt + first message so agent speaks in character (e.g. John Smith caller, not "Alex")
+          const prompt = customParameters?.prompt || '';
+          const firstMessage = customParameters?.first_message || 'Hello, I need help.';
           const initialConfig = {
             type: 'conversation_initiation_client_data',
-            dynamic_variables: {
-              user_name: 'Angelo',
-              user_id: 1234,
-            },
             conversation_config_override: {
               agent: {
-                prompt: {
-                  prompt: customParameters?.prompt || 'you are a gary from the phone store',
-                },
-                first_message:
-                  customParameters?.first_message || 'hey there! how can I help you today?',
+                prompt: { prompt },
+                first_message: firstMessage,
               },
             },
           };
 
-          console.log(
-            '[ElevenLabs] Sending initial config with prompt:',
-            initialConfig.conversation_config_override.agent.prompt.prompt
-          );
+          console.log('[ElevenLabs] Sending scenario config – first message:', firstMessage.slice(0, 50) + '...');
 
-          // Send the configuration to ElevenLabs
           elevenLabsWs.send(JSON.stringify(initialConfig));
         });
 
@@ -302,9 +318,6 @@ fastify.register(async (fastifyInstance) => {
       }
     };
 
-    // Set up ElevenLabs connection
-    setupElevenLabs();
-
     // Handle messages from Twilio
     ws.on('message', (message) => {
       try {
@@ -332,6 +345,9 @@ fastify.register(async (fastifyInstance) => {
             
             console.log(`[Twilio] Stream started - StreamSid: ${streamSid}, CallSid: ${callSid}`);
             console.log('[Twilio] Start parameters:', customParameters);
+            
+            // NOW set up ElevenLabs connection after we have the parameters
+            setupElevenLabs();
             break;
 
           case 'media':
@@ -571,10 +587,10 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
     
     console.log(`[Analysis] Saved to ${analysisFilename}`);
     
-    // Send the analysis to the frontend endpoint
+    // Send the analysis to the frontend endpoint (must end with /api/analysis)
     try {
-      const frontendUrl = process.env.FRONTEND_URL || 'https://first-pulse-4xsp9cb9j-texseractrums-projects.vercel.app/api/analysis';
-      
+      const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+      const frontendUrl = `${base}/api/analysis`;
       console.log(`[Analysis] Sending analysis to frontend at: ${frontendUrl}`);
       
       const frontendResponse = await fetch(frontendUrl, {
@@ -598,7 +614,48 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
     return analysisData;
   } catch (error) {
     console.error('[Analysis] Error analyzing conversation:', error);
-    throw error;
+    
+    // Send a "failed" analysis to frontend so status updates even when OpenAI fails
+    const failedAnalysis = {
+      scenario: scenarioName || 'Unknown',
+      scenarioId: parsedScenarioId,
+      overall_rating: {
+        score: 0,
+        summary: "Analysis could not be completed - OpenAI API error"
+      },
+      strengths: ["Call was completed successfully"],
+      areas_for_improvement: ["Analysis unavailable - please check OpenAI API key"],
+      information_handling: {
+        gathered_correctly: [],
+        missed_or_incorrect: []
+      },
+      action_assessment: {
+        appropriate_actions: [],
+        inappropriate_actions: []
+      },
+      efficiency: {
+        response_time_rating: 0,
+        comments: "Unable to assess - analysis failed"
+      },
+      final_recommendation: "Call completed but analysis failed. Please configure a valid OpenAI API key in outbound/.env to enable call analysis.",
+      pass_fail: "FAIL"
+    };
+    
+    // Still try to send the failed analysis to frontend
+    try {
+      const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+      const frontendUrl = `${base}/api/analysis`;
+      await fetch(frontendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(failedAnalysis),
+      });
+      console.log('[Analysis] Sent failure notification to frontend');
+    } catch (frontendError) {
+      console.error('[Analysis] Could not notify frontend of failure:', frontendError);
+    }
+    
+    return null;
   }
 }
 
