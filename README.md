@@ -204,9 +204,10 @@ Open [http://localhost:3000](http://localhost:3000).
 | Where | Variable | Purpose |
 |-------|----------|---------|
 | outbound | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` | Twilio outbound calls |
-| outbound | `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` | ElevenLabs Conversational AI |
+| outbound | `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` | ElevenLabs Conversational AI (default voice) |
+| outbound | `ELEVENLABS_AGENT_ID_1`, `_2`, `_3` (optional) | Per-scenario agents (e.g. male for John/Michael, female for Sarah) |
 | outbound | `OPENAI_API_KEY` | Grading transcript |
-| outbound | `FRONTEND_URL` (optional) | URL for POSTing analysis (defaults to example URL in code) |
+| outbound | `FRONTEND_URL` (optional) | Base URL of frontend for POSTing analysis, e.g. `http://localhost:3000` (no trailing slash) |
 | frontend | `OUTBOUND_CALL_API_URL` | Base URL of outbound service (no trailing slash) |
 
 ---

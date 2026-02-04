@@ -37,6 +37,10 @@ export async function POST(request: NextRequest) {
       message: 'No JSON response' 
     }));
 
+    if (!apiResponse.ok) {
+      console.error('[outbound-call] Outbound service error:', data);
+    }
+
     // Return the response
     return NextResponse.json(data, { status: apiResponse.status });
   } catch (error) {
