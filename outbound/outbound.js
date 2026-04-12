@@ -41,7 +41,7 @@ if (!TWILIO_ACCOUNT_SID.startsWith('AC')) {
 }
 
 // Initialize Fastify server
-const fastify = Fastify();
+const fastify = Fastify({ logger: true });
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
 
@@ -64,21 +64,40 @@ const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
 });
 
-// Pick agent ID by scenario: 1=John (male), 2=Sarah (female), 3=Michael (male). Set in .env:
-// ELEVENLABS_AGENT_ID_1, ELEVENLABS_AGENT_ID_2, ELEVENLABS_AGENT_ID_3 (optional; else uses ELEVENLABS_AGENT_ID)
-function getAgentIdForScenario(scenarioId) {
-  const id = String(scenarioId || '').trim();
-  if (!id) return ELEVENLABS_AGENT_ID;
-  const perScenario = process.env[`ELEVENLABS_AGENT_ID_${id}`];
-  return perScenario && perScenario.trim() ? perScenario.trim() : ELEVENLABS_AGENT_ID;
-}
+// NEW: Random Scenarios List
+const RANDOM_SCENARIOS = [
+  {
+    id: "panic_attack",
+    name: "Panic Attack / Hyperventilation",
+    prompt: "You are a young person having a severe panic attack. You are hyperventilating and having trouble speaking clearly. You are at 'Central Park near the fountain'. You feel like you are dying. You are scared and need help immediately. Act very distressed, breathe heavily between words.",
+    first_message: "I... I can't... breathe... help me..."
+  },
+  {
+    id: "witness_fire",
+    name: "Witnessing a Fire",
+    prompt: "You are a bystander who just saw a house catch fire at '12 Maple Street'. You are shouting and very urgent. There might be people inside. You are coughing slightly from smoke. You are frantic and want the fire department NOW.",
+    first_message: "Fire! There's a fire! 12 Maple Street! Hurry!"
+  },
+  {
+    id: "unconscious_person",
+    name: "Found Unconscious Person",
+    prompt: "You are a jogger who found an elderly man unconscious on the sidewalk at '45th Avenue'. He is breathing but not waking up. You are calm but concerned. You don't know who he is. You are following instructions carefully.",
+    first_message: "Hello? I found a man passed out on the sidewalk. He's not waking up."
+  },
+  {
+    id: "intruder_alert",
+    name: "Intruder Alert",
+    prompt: "You are whispering because there is someone in your house. You are hiding in the closet. Address is '500 Oak Lane'. You hear footsteps downstairs. You are terrified and speaking very quietly.",
+    first_message: "Shhh... please... there's someone in my house..."
+  }
+];
 
 // Helper function to get signed URL for authenticated conversations
-async function getSignedUrl(agentId) {
-  const aid = agentId || ELEVENLABS_AGENT_ID;
+async function getSignedUrl() {
+  console.log(`[ElevenLabs] Requesting signed URL for agent: ${ELEVENLABS_AGENT_ID}`);
   try {
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${aid}`,
+      `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${ELEVENLABS_AGENT_ID}`,
       {
         method: 'GET',
         headers: {
@@ -88,37 +107,42 @@ async function getSignedUrl(agentId) {
     );
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[ElevenLabs] Signed URL failed: ${response.status} ${response.statusText}`, errorText);
       throw new Error(`Failed to get signed URL: ${response.statusText}`);
     }
 
     const data = await response.json();
+    console.log(`[ElevenLabs] Signed URL received successfully`);
     return data.signed_url;
   } catch (error) {
-    console.error('Error getting signed URL:', error);
+    console.error('[ElevenLabs] Fetch Signed URL Error:', error);
     throw error;
   }
 }
 
 // Route to initiate outbound calls
 fastify.post('/outbound-call', async (request, reply) => {
-  const { number, prompt, first_message, scenarioId } = request.body;
+  const { number } = request.body;
 
   if (!number) {
     return reply.code(400).send({ error: 'Phone number is required' });
   }
 
   try {
-    // We pass scenarioId through Twilio -> media stream customParameters,
-    // so the analysis can be deterministically linked back to a scenario in the UI.
-    const scenarioIdParam =
-      scenarioId !== undefined && scenarioId !== null ? String(scenarioId) : '';
+    // RANDOMLY PICK A SCENARIO
+    const randomScenario = RANDOM_SCENARIOS[Math.floor(Math.random() * RANDOM_SCENARIOS.length)];
+    console.log(`[Call Setup] Selected Random Scenario: ${randomScenario.name}`);
 
     const baseUrl = PUBLIC_BASE_URL || `https://${request.headers.host}`;
-    const twimlUrl = `${baseUrl}/outbound-call-twiml?prompt=${encodeURIComponent(
-      prompt
-    )}&first_message=${encodeURIComponent(first_message)}&scenarioId=${encodeURIComponent(
-      scenarioIdParam
-    )}`;
+
+    // Encode parameters safely
+    // Encode minimal parameters
+    const params = new URLSearchParams({
+      scenarioId: randomScenario.id
+    });
+
+    const twimlUrl = `${baseUrl}/outbound-call-twiml?${params.toString()}`;
 
     const call = await twilioClient.calls.create({
       from: TWILIO_PHONE_NUMBER,
@@ -128,7 +152,8 @@ fastify.post('/outbound-call', async (request, reply) => {
 
     reply.send({
       success: true,
-      message: 'Call initiated',
+      message: 'Call initiated with Random Scenario',
+      scenario: randomScenario.name,
       callSid: call.sid,
     });
   } catch (error) {
@@ -145,9 +170,9 @@ fastify.post('/outbound-call', async (request, reply) => {
 
 // TwiML route for outbound calls
 fastify.all('/outbound-call-twiml', async (request, reply) => {
-  const prompt = request.query.prompt || '';
-  const first_message = request.query.first_message || '';
-  const scenarioId = request.query.scenarioId || '';
+  const scenarioId = request.query.scenarioId || 'unknown';
+  const scenario = RANDOM_SCENARIOS.find(s => s.id === scenarioId) || RANDOM_SCENARIOS[0];
+
   const baseUrl = PUBLIC_BASE_URL || request.headers.host;
   const wsBase = baseUrl.replace(/^https?:\/\//, 'wss://');
 
@@ -155,9 +180,10 @@ fastify.all('/outbound-call-twiml', async (request, reply) => {
     <Response>
         <Connect>
         <Stream url="${wsBase}/outbound-media-stream">
-            <Parameter name="prompt" value="${prompt}" />
-            <Parameter name="first_message" value="${first_message}" />
-            <Parameter name="scenarioId" value="${scenarioId}" />
+            <Parameter name="prompt" value="${scenario.prompt}" />
+            <Parameter name="first_message" value="${scenario.first_message}" />
+            <Parameter name="scenarioName" value="${scenario.name}" />
+            <Parameter name="scenarioId" value="${scenario.id}" />
         </Stream>
         </Connect>
     </Response>`;
@@ -166,279 +192,218 @@ fastify.all('/outbound-call-twiml', async (request, reply) => {
 });
 
 // WebSocket route for handling media streams
-fastify.register(async (fastifyInstance) => {
-  fastifyInstance.get('/outbound-media-stream', { websocket: true }, (ws, req) => {
-    console.info('[Server] Twilio connected to outbound media stream');
+fastify.register(async function wsPlugin(fastifyInstance) {
+  fastifyInstance.route({
+    method: 'GET',
+    url: '/outbound-media-stream',
+    handler: (request, reply) => {
+      // Normal HTTP handler (never reached for WS connections)
+      reply.code(404).send();
+    },
+    wsHandler: (socket, req) => {
+      console.info('[Server] Twilio media stream WebSocket connected');
 
-    // Variables to track the call
-    let streamSid = null;
-    let callSid = null;
-    let elevenLabsWs = null;
-    let customParameters = null; // Add this to store parameters
-    let conversationHistory = [];
-    let callStartTime = null;
+      socket.on('error', (err) => console.error('[WS] Error:', err));
 
-    // Handle WebSocket errors
-    ws.on('error', console.error);
+      // Variables to track the call
+      let streamSid = null;
+      let callSid = null;
+      let elevenLabsWs = null;
+      let customParameters = null;
+      let conversationHistory = [];
+      let callStartTime = null;
 
-    // Set up ElevenLabs connection (agent/voice depends on scenario)
-    const setupElevenLabs = async () => {
-      try {
-        const scenarioIdParam = customParameters?.scenarioId ?? '';
-        const agentId = getAgentIdForScenario(scenarioIdParam);
-        console.log(`[ElevenLabs] Using agent for scenario ${scenarioIdParam || 'default'}: ${agentId}`);
-        const signedUrl = await getSignedUrl(agentId);
-        elevenLabsWs = new WebSocket(signedUrl);
+      // Set up ElevenLabs connection
+      const setupElevenLabs = async () => {
+        try {
+          const scenarioName = customParameters?.scenarioName || 'Random Scenario';
+          console.log(`[ElevenLabs] Getting signed URL for scenario: ${scenarioName}`);
 
-        elevenLabsWs.on('open', () => {
-          console.log('[ElevenLabs] Connected to Conversational AI');
+          const signedUrl = await getSignedUrl();
+          console.log(`[ElevenLabs] Signed URL obtained, connecting to WebSocket...`);
+          elevenLabsWs = new WebSocket(signedUrl);
 
-          // Send scenario prompt + first message so agent speaks in character (e.g. John Smith caller, not "Alex")
-          const prompt = customParameters?.prompt || '';
-          const firstMessage = customParameters?.first_message || 'Hello, I need help.';
-          const initialConfig = {
-            type: 'conversation_initiation_client_data',
-            conversation_config_override: {
-              agent: {
-                prompt: { prompt },
-                first_message: firstMessage,
-              },
-            },
-          };
+          elevenLabsWs.on('open', () => {
+            console.log('[ElevenLabs] WebSocket Opened - Connected to Conversational AI');
 
-          console.log('[ElevenLabs] Sending scenario config – first message:', firstMessage.slice(0, 50) + '...');
+            console.log('[ElevenLabs] Sending initiation data with ulaw_8000 output format');
 
-          elevenLabsWs.send(JSON.stringify(initialConfig));
-        });
-
-        elevenLabsWs.on('message', (data) => {
-          try {
-            const message = JSON.parse(data);
-
-            switch (message.type) {
-              case 'conversation_initiation_metadata':
-                console.log('[ElevenLabs] Received initiation metadata');
-                break;
-
-              case 'audio':
-                if (streamSid) {
-                  if (message.audio?.chunk) {
-                    const audioData = {
-                      event: 'media',
-                      streamSid,
-                      media: {
-                        payload: message.audio.chunk,
-                      },
-                    };
-                    ws.send(JSON.stringify(audioData));
-                  } else if (message.audio_event?.audio_base_64) {
-                    const audioData = {
-                      event: 'media',
-                      streamSid,
-                      media: {
-                        payload: message.audio_event.audio_base_64,
-                      },
-                    };
-                    ws.send(JSON.stringify(audioData));
-                  }
-                } else {
-                  console.log('[ElevenLabs] Received audio but no StreamSid yet');
+            const initialConfig = {
+              type: 'conversation_initiation_client_data',
+              conversation_config_override: {
+                tts: {
+                  output_format: 'ulaw_8000'
                 }
-                break;
+              }
+            };
+            elevenLabsWs.send(JSON.stringify(initialConfig));
+            console.log('[ElevenLabs] Config sent successfully');
+          });
 
-              case 'interruption':
-                if (streamSid) {
-                  ws.send(
-                    JSON.stringify({
-                      event: 'clear',
-                      streamSid,
-                    })
-                  );
-                }
-                break;
+          // PCM 16-bit linear to mulaw conversion function
+          function pcmToMulaw(sample) {
+            const MULAW_MAX = 0x1FFF;
+            const MULAW_BIAS = 33;
+            let sign = (sample >> 8) & 0x80;
+            if (sign !== 0) sample = -sample;
+            sample = sample + MULAW_BIAS;
+            if (sample > MULAW_MAX) sample = MULAW_MAX;
 
-              case 'ping':
-                if (message.ping_event?.event_id) {
-                  elevenLabsWs.send(
-                    JSON.stringify({
-                      type: 'pong',
-                      event_id: message.ping_event.event_id,
-                    })
-                  );
-                }
-                break;
-
-              case 'agent_response':
-                const agentResponse = message.agent_response_event?.agent_response;
-                console.log(
-                  `[Twilio] Agent response: ${agentResponse}`
-                );
-                
-                // Add to conversation history
-                if (agentResponse) {
-                  conversationHistory.push({
-                    role: "assistant",
-                    content: agentResponse
-                  });
-                }
-                break;
-
-              case 'user_transcript':
-                const userTranscript = message.user_transcription_event?.user_transcript;
-                console.log(
-                  `[Twilio] User transcript: ${userTranscript}`
-                );
-                
-                // Add to conversation history
-                if (userTranscript) {
-                  conversationHistory.push({
-                    role: "user",
-                    content: userTranscript
-                  });
-                }
-                break;
-
-              default:
-                console.log(`[ElevenLabs] Unhandled message type: ${message.type}`);
+            let exponent = 7;
+            let mask = 0x1000;
+            for (let i = 7; i > 0; i--) {
+              if (sample >= mask) { exponent = i; break; }
+              mask >>= 1;
+              if (i === 1) exponent = 0;
             }
-          } catch (error) {
-            console.error('[ElevenLabs] Error processing message:', error);
+            const mantissa = (sample >> (exponent + 3)) & 0x0F;
+            const mulaw = ~(sign | (exponent << 4) | mantissa);
+            return mulaw & 0xFF;
           }
-        });
 
-        elevenLabsWs.on('error', (error) => {
-          console.error('[ElevenLabs] WebSocket error:', error);
-        });
+          let audioLogged = false;
+          elevenLabsWs.on('message', (data) => {
+            try {
+              const message = JSON.parse(data);
+              if (message.type === 'audio') {
+                if (streamSid) {
+                  const payload = message.audio_event?.audio_base_64 || message.audio?.chunk;
+                  if (payload) {
+                    // Decode the base64 PCM audio (16kHz, 16-bit)
+                    const pcmBuffer = Buffer.from(payload, 'base64');
 
-        elevenLabsWs.on('close', () => {
-          console.log('[ElevenLabs] Disconnected');
-        });
-      } catch (error) {
-        console.error('[ElevenLabs] Setup error:', error);
-      }
-    };
+                    if (!audioLogged) {
+                      console.log(`[Audio] PCM buffer: ${pcmBuffer.length} bytes (16kHz), downsampling to 8kHz + mulaw...`);
+                      audioLogged = true;
+                    }
 
-    // Handle messages from Twilio
-    ws.on('message', (message) => {
-      try {
-        const msg = JSON.parse(message);
-        if (msg.event !== 'media') {
-          console.log(`[Twilio] Received event: ${msg.event}`);
+                    // Downsample 16kHz → 8kHz (skip every other sample) + convert to mulaw
+                    const numSamples16k = pcmBuffer.length / 2; // 16-bit = 2 bytes per sample
+                    const numSamples8k = Math.floor(numSamples16k / 2); // half the samples
+                    const mulawBuffer = Buffer.alloc(numSamples8k);
+                    for (let i = 0; i < numSamples8k; i++) {
+                      const sample = pcmBuffer.readInt16LE(i * 4); // skip every other sample (4 bytes apart)
+                      mulawBuffer[i] = pcmToMulaw(sample);
+                    }
+
+                    // Send in chunks of 320 bytes (20ms at 8kHz mulaw)
+                    const CHUNK_SIZE = 320;
+                    for (let offset = 0; offset < mulawBuffer.length; offset += CHUNK_SIZE) {
+                      const chunk = mulawBuffer.subarray(offset, offset + CHUNK_SIZE);
+                      socket.send(JSON.stringify({
+                        event: 'media',
+                        streamSid,
+                        media: { payload: chunk.toString('base64') }
+                      }));
+                    }
+                  }
+                }
+              } else if (message.type === 'agent_response') {
+                const resp = message.agent_response_event?.agent_response;
+                console.log(`[十一Labs] Agent: ${resp}`);
+                if (resp) conversationHistory.push({ role: "assistant", content: resp });
+              } else if (message.type === 'user_transcript') {
+                const trans = message.user_transcription_event?.user_transcript;
+                console.log(`[十一Labs] User: ${trans}`);
+                if (trans) conversationHistory.push({ role: "user", content: trans });
+              } else if (message.type === 'interruption') {
+                if (streamSid) socket.send(JSON.stringify({ event: 'clear', streamSid }));
+              }
+            } catch (e) {
+              console.error('[ElevenLabs] Error parsing message:', e);
+            }
+          });
+
+          elevenLabsWs.on('error', (err) => console.error('[ElevenLabs] WebSocket Error:', err));
+          elevenLabsWs.on('close', (code, reason) => console.log(`[ElevenLabs] WebSocket Closed - code: ${code}, reason: ${reason}`));
+        } catch (error) {
+          console.error('[ElevenLabs] Setup Error:', error);
         }
+      };
 
-        switch (msg.event) {
-          case 'start':
+      socket.on('message', (message) => {
+        try {
+          const msg = JSON.parse(message);
+          if (msg.event === 'start') {
             streamSid = msg.start.streamSid;
             callSid = msg.start.callSid;
             customParameters = msg.start.customParameters;
             callStartTime = new Date();
-            
-            // Initialize conversation with the prompt and first message
-            conversationHistory.push({
-              role: "system", 
-              content: customParameters?.prompt || 'Default prompt'
-            });
-            conversationHistory.push({
-              role: "assistant", 
-              content: customParameters?.first_message || 'Default message'
-            });
-            
-            console.log(`[Twilio] Stream started - StreamSid: ${streamSid}, CallSid: ${callSid}`);
-            console.log('[Twilio] Start parameters:', customParameters);
-            
-            // NOW set up ElevenLabs connection after we have the parameters
+
+            conversationHistory.push({ role: "system", content: customParameters?.prompt || 'Default prompt' });
+            conversationHistory.push({ role: "assistant", content: customParameters?.first_message || 'Default message' });
+
+            console.log(`[Twilio] Stream Started: ${streamSid}, Call: ${callSid}`);
             setupElevenLabs();
-            break;
-
-          case 'media':
+          } else if (msg.event === 'media') {
             if (elevenLabsWs?.readyState === WebSocket.OPEN) {
-              const audioMessage = {
-                user_audio_chunk: Buffer.from(msg.media.payload, 'base64').toString('base64'),
-              };
-              elevenLabsWs.send(JSON.stringify(audioMessage));
+              elevenLabsWs.send(JSON.stringify({
+                user_audio_chunk: msg.media.payload
+              }));
             }
-            break;
-
-          case 'stop':
-            console.log(`[Twilio] Stream ${streamSid} ended`);
-            
-            // Analyze conversation with OpenAI
-            if (conversationHistory.length > 0) {
-              analyzeConversation(callSid, conversationHistory, customParameters).catch(console.error);
-            }
-            
-            if (elevenLabsWs?.readyState === WebSocket.OPEN) {
-              elevenLabsWs.close();
-            }
-            break;
-
-          default:
-            console.log(`[Twilio] Unhandled event: ${msg.event}`);
+          } else if (msg.event === 'stop') {
+            console.log(`[Twilio] Stream Stopped: ${streamSid}`);
+            if (conversationHistory.length > 0) analyzeConversation(callSid, conversationHistory, customParameters);
+            if (elevenLabsWs?.readyState === WebSocket.OPEN) elevenLabsWs.close();
+          }
+        } catch (e) {
+          console.error('[Twilio] Message error:', e);
         }
-      } catch (error) {
-        console.error('[Twilio] Error processing message:', error);
-      }
-    });
+      });
 
-    // Handle WebSocket closure
-    ws.on('close', () => {
-      console.log('[Twilio] Client disconnected');
-      if (elevenLabsWs?.readyState === WebSocket.OPEN) {
-        elevenLabsWs.close();
-      }
-    });
+      socket.on('close', () => {
+        console.log('[Twilio] WebSocket Closed');
+        if (elevenLabsWs?.readyState === WebSocket.OPEN) elevenLabsWs.close();
+      });
+    }
   });
 });
 
 // Update the analyzeConversation function to include transcript in the analysis prompt
 async function analyzeConversation(callSid, conversationHistory, parameters) {
   try {
-    const parsedScenarioId = (() => {
-      const raw = parameters?.scenarioId;
-      if (raw === undefined || raw === null) return undefined;
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : undefined;
-    })();
+    const parsedScenarioId = parameters?.scenarioId || null;
 
     // Better scenario name extraction
-    let scenarioName = "Unknown scenario";
+    let scenarioName = parameters?.scenarioName || "Random Emergency Scenario";
     const promptText = parameters?.prompt || '';
-    
-    if (promptText.includes("John Smith")) {
-      scenarioName = "John Smith - Elderly patient with chest pain";
-    } else if (promptText.includes("Sarah Johnson")) {
-      scenarioName = "Sarah Johnson - Unconscious teenager";
-    } else if (promptText.includes("Michael Chen")) {
-      scenarioName = "Michael Chen - Multi-vehicle collision";
-    } else {
-      scenarioName = promptText.split('.')[0]?.substring(0, 50) || 'Unknown scenario';
+
+    // Fallback: If no name passed, try to guess (legacy support)
+    if (scenarioName === "Unknown scenario" || scenarioName === "Random Emergency Scenario") {
+      if (promptText.includes("John Smith")) {
+        scenarioName = "John Smith - Elderly patient with chest pain";
+      } else if (promptText.includes("Sarah Johnson")) {
+        scenarioName = "Sarah Johnson - Unconscious teenager";
+      } else if (promptText.includes("Michael Chen")) {
+        scenarioName = "Michael Chen - Multi-vehicle collision";
+      }
     }
-    
+
     console.log(`[Analysis] Starting analysis for call ${callSid}`);
     console.log(`[Analysis] Identified scenario: ${scenarioName}`);
     console.log(`[Analysis] Conversation length: ${conversationHistory.length} messages`);
-    
+
     // Format the transcript for inclusion in the prompt
     let formattedTranscript = "CALL TRANSCRIPT:\n\n";
-    
+
     // Add the first message (system prompt) separately with a note
     if (conversationHistory.length > 0 && conversationHistory[0].role === "system") {
       formattedTranscript += "SCENARIO DETAILS: " + conversationHistory[0].content + "\n\n";
     }
-    
+
     // Add the rest of the conversation as a transcript
     formattedTranscript += "CONVERSATION:\n";
-    
+
     // Skip the system message in this part (already added above)
     const transcriptMessages = conversationHistory.slice(
       conversationHistory[0]?.role === "system" ? 1 : 0
     );
-    
+
     transcriptMessages.forEach((msg, index) => {
       const role = msg.role === "assistant" ? "RESPONDER" : "CALLER";
       formattedTranscript += `[${role}]: ${msg.content}\n`;
     });
-    
+
     // Create system prompt for analysis WITH transcript included
     const analysisPrompt = {
       role: "system",
@@ -499,7 +464,7 @@ RETURN YOUR ANALYSIS AS A PROPERLY FORMATTED JSON OBJECT with the following stru
 
 DO NOT include any explanatory text, markdown formatting, or code blocks - return ONLY the valid JSON object.`
     };
-    
+
     // Since we now include the transcript in the prompt itself,
     // we only need to send the prompt to OpenAI
     const messages = [
@@ -509,7 +474,7 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
         content: "Please provide your detailed analysis of this emergency training call."
       }
     ];
-    
+
     // Call OpenAI API
     const response = await openai.chat.completions.create({
       model: "gpt-4-turbo",
@@ -517,12 +482,12 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
       temperature: 0.7,
       max_tokens: 1500
     });
-    
+
     // Get the analysis
     const analysisText = response.choices[0].message.content;
-    
+
     console.log(`[Analysis] Completed for call ${callSid}`);
-    
+
     // Parse the JSON response from OpenAI
     let analysisData;
     try {
@@ -532,7 +497,7 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
     } catch (parseError) {
       console.error("[Analysis] Error parsing OpenAI response as JSON:", parseError);
       console.log("[Analysis] Raw response:", analysisText);
-      
+
       // Create a fallback analysis object if parsing fails
       analysisData = {
         scenario: scenarioName,
@@ -565,11 +530,11 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
     if (parsedScenarioId && typeof analysisData === 'object' && analysisData) {
       analysisData.scenarioId = parsedScenarioId;
     }
-    
+
     // Save analysis to file along with the full conversation
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const analysisFilename = `analysis_${callSid}_${timestamp}.json`;
-    
+
     // Full analysis data to save locally
     const fullAnalysisData = {
       callSid,
@@ -579,42 +544,45 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
       formattedTranscript,
       analysis: analysisData
     };
-    
+
     await fs.writeFile(
-      analysisFilename, 
+      analysisFilename,
       JSON.stringify(fullAnalysisData, null, 2)
     );
-    
+
     console.log(`[Analysis] Saved to ${analysisFilename}`);
-    
+
     // Send the analysis to the frontend endpoint (must end with /api/analysis)
     try {
       const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
       const frontendUrl = `${base}/api/analysis`;
       console.log(`[Analysis] Sending analysis to frontend at: ${frontendUrl}`);
-      
+
       const frontendResponse = await fetch(frontendUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(analysisData),
+        body: JSON.stringify({
+          ...analysisData,
+          callSid: callSid
+        }),
       });
-      
+
       if (!frontendResponse.ok) {
         throw new Error(`Frontend API responded with status: ${frontendResponse.status}`);
       }
-      
+
       const frontendResult = await frontendResponse.json();
       console.log(`[Analysis] Frontend API response:`, frontendResult);
     } catch (frontendError) {
       console.error('[Analysis] Error sending analysis to frontend:', frontendError);
     }
-    
+
     return analysisData;
   } catch (error) {
     console.error('[Analysis] Error analyzing conversation:', error);
-    
+
     // Send a "failed" analysis to frontend so status updates even when OpenAI fails
     const failedAnalysis = {
       scenario: scenarioName || 'Unknown',
@@ -640,7 +608,7 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
       final_recommendation: "Call completed but analysis failed. Please configure a valid OpenAI API key in outbound/.env to enable call analysis.",
       pass_fail: "FAIL"
     };
-    
+
     // Still try to send the failed analysis to frontend
     try {
       const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
@@ -654,7 +622,7 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
     } catch (frontendError) {
       console.error('[Analysis] Could not notify frontend of failure:', frontendError);
     }
-    
+
     return null;
   }
 }
@@ -662,23 +630,23 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
 // Add a new endpoint to retrieve analysis for a call
 fastify.get('/analysis/:callSid', async (request, reply) => {
   const { callSid } = request.params;
-  
+
   try {
     // Find the latest analysis file for this call
     const files = await fs.readdir('.');
     const analysisFiles = files.filter(f => f.startsWith(`analysis_${callSid}`));
-    
+
     if (analysisFiles.length === 0) {
       return reply.code(404).send({ error: 'Analysis not found' });
     }
-    
+
     // Sort by timestamp (which is part of the filename)
     analysisFiles.sort().reverse();
-    
+
     // Read the latest analysis
     const latestAnalysis = await fs.readFile(analysisFiles[0], 'utf8');
     const analysis = JSON.parse(latestAnalysis);
-    
+
     return reply.send(analysis);
   } catch (error) {
     console.error(`Error retrieving analysis for call ${callSid}:`, error);
