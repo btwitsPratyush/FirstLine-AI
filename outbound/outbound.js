@@ -655,7 +655,7 @@ fastify.get('/analysis/:callSid', async (request, reply) => {
 });
 
 // Start the Fastify server
-fastify.listen({ port: PORT }, (err) => {
+fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) {
     console.error('Error starting server:', err);
     process.exit(1);
