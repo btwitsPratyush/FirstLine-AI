@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Footer } from "./components/Footer";
 
 // Country codes with flags
@@ -77,19 +77,13 @@ export default function Home() {
     const [isCountryDropdownOpen, setIsCountryDropdownOpen] = useState(false);
     const [countrySearch, setCountrySearch] = useState("");
     const [highlightedCountryIndex, setHighlightedCountryIndex] = useState(0);
-    const countryListRef = useRef<HTMLDivElement>(null);
-    const highlightedOptionRef = useRef<HTMLButtonElement | null>(null);
+
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
     const [callStatus, setCallStatus] = useState<"idle" | "calling" | "in-progress" | "analyzing" | "completed">("idle");
     const [currentCallSid, setCurrentCallSid] = useState<string | null>(null);
     const [lastAnalysis, setLastAnalysis] = useState<AnalysisResult | null>(null);
-    const [isClient, setIsClient] = useState(false);
 
-    // Client-side only initialization
-    useEffect(() => {
-        setIsClient(true);
-    }, []);
 
     // Filtered countries for search and keyboard nav
     const filteredCountries = useMemo(() => {
@@ -233,7 +227,7 @@ export default function Home() {
                 const errText = await response.text();
                 setSubmitError(`Failed to start call: ${errText}`);
             }
-        } catch (error) {
+        } catch {
             setSubmitError("Network error. Check backend connection.");
         } finally {
             setIsSubmitting(false);
