@@ -609,19 +609,14 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
       pass_fail: "FAIL"
     };
 
-    // Still try to send the failed analysis to frontend
-    try {
-      const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
-      const frontendUrl = `${base}/api/analysis`;
-      await fetch(frontendUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(failedAnalysis),
-      });
-      console.log('[Analysis] Sent failure notification to frontend');
-    } catch (frontendError) {
-      console.error('[Analysis] Could not notify frontend of failure:', frontendError);
-    }
+    // ALWAYS SAVE the failed analysis to disk so Vercel can fetch it later!
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const analysisFilename = `analysis_${callSid}_${timestamp}.json`;
+    await fs.writeFile(
+      analysisFilename,
+      JSON.stringify({ callSid, timestamp, scenarioName, analysis: failedAnalysis }, null, 2)
+    );
+    console.log(`[Analysis] Saved FAILED format to ${analysisFilename}`);
 
     return null;
   }
