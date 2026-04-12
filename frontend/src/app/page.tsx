@@ -224,8 +224,19 @@ export default function Home() {
                 setCurrentCallSid(data.callSid);
                 setCallStatus("in-progress");
             } else {
+                let errorMessage = "Unable to start simulation.";
                 const errText = await response.text();
-                setSubmitError(`Failed to start call: ${errText}`);
+                try {
+                    const errObj = JSON.parse(errText);
+                    if (errObj.detail && errObj.detail.includes("unverified")) {
+                         errorMessage = "Free Trial limit: You can only call numbers you verified on Twilio. Please select India (+91) for now.";
+                    } else {
+                         errorMessage = errObj.error || errObj.message || errObj.detail || "Unexpected error occurred.";
+                    }
+                } catch {
+                    errorMessage = errText;
+                }
+                setSubmitError(errorMessage);
             }
         } catch {
             setSubmitError("Network error. Check backend connection.");
