@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
 
     // Get API URL from environment variable
     const apiUrl = process.env.OUTBOUND_CALL_API_URL?.trim();
-    
+
     if (!apiUrl) {
       console.error('OUTBOUND_CALL_API_URL environment variable is not set');
       return NextResponse.json(
@@ -26,15 +26,16 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
       },
       body: JSON.stringify(body),
     });
 
     // Get the response data
-    const data = await apiResponse.json().catch(() => ({ 
+    const data = await apiResponse.json().catch(() => ({
       success: apiResponse.ok,
       status: apiResponse.status,
-      message: 'No JSON response' 
+      message: 'No JSON response'
     }));
 
     if (!apiResponse.ok) {
