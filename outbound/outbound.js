@@ -284,24 +284,14 @@ fastify.register(async function wsPlugin(fastifyInstance) {
                 if (streamSid) {
                   const payload = message.audio_event?.audio_base_64 || message.audio?.chunk;
                   if (payload) {
-                    // Decode the base64 PCM audio (16kHz, 16-bit)
-                    const pcmBuffer = Buffer.from(payload, 'base64');
+                    const mulawBuffer = Buffer.from(payload, 'base64');
 
                     if (!audioLogged) {
-                      console.log(`[Audio] PCM buffer: ${pcmBuffer.length} bytes (16kHz), downsampling to 8kHz + mulaw...`);
+                      console.log(`[Audio] Received ulaw_8000 buffer: ${mulawBuffer.length} bytes, sending to Twilio...`);
                       audioLogged = true;
                     }
 
-                    // Downsample 16kHz → 8kHz (skip every other sample) + convert to mulaw
-                    const numSamples16k = pcmBuffer.length / 2; // 16-bit = 2 bytes per sample
-                    const numSamples8k = Math.floor(numSamples16k / 2); // half the samples
-                    const mulawBuffer = Buffer.alloc(numSamples8k);
-                    for (let i = 0; i < numSamples8k; i++) {
-                      const sample = pcmBuffer.readInt16LE(i * 4); // skip every other sample (4 bytes apart)
-                      mulawBuffer[i] = pcmToMulaw(sample);
-                    }
-
-                    // Send in chunks of 320 bytes (20ms at 8kHz mulaw)
+                    // Send in chunks of 320 bytes
                     const CHUNK_SIZE = 320;
                     for (let offset = 0; offset < mulawBuffer.length; offset += CHUNK_SIZE) {
                       const chunk = mulawBuffer.subarray(offset, offset + CHUNK_SIZE);
