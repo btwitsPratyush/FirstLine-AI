@@ -207,22 +207,19 @@ fastify.register(async function wsPlugin(fastifyInstance) {
 
       // PCM 16-bit linear to mulaw conversion function
       function pcmToMulaw(sample) {
-        const MULAW_MAX = 0x1FFF;
-        const MULAW_BIAS = 33;
-        let sign = (sample >> 8) & 0x80;
-        if (sign !== 0) sample = -sample;
-        sample = sample + MULAW_BIAS;
-        if (sample > MULAW_MAX) sample = MULAW_MAX;
+        let sign = (sample < 0) ? 0x80 : 0x00;
+        let pcm16 = sample;
+        if (pcm16 < 0) pcm16 = -pcm16;
+        if (pcm16 > 32635) pcm16 = 32635;
+        pcm16 += 132;
 
         let exponent = 7;
-        let mask = 0x1000;
-        for (let i = 7; i > 0; i--) {
-          if (sample >= mask) { exponent = i; break; }
-          mask >>= 1;
-          if (i === 1) exponent = 0;
+        for (let mask = 0x4000; (pcm16 & mask) === 0; mask >>= 1) {
+            exponent--;
+            if (exponent === 0) break;
         }
-        const mantissa = (sample >> (exponent + 3)) & 0x0F;
-        const mulaw = ~(sign | (exponent << 4) | mantissa);
+        let mantissa = (pcm16 >> (exponent + 3)) & 0x0F;
+        let mulaw = ~(sign | (exponent << 4) | mantissa);
         return mulaw & 0xFF;
       }
 
@@ -245,36 +242,36 @@ fastify.register(async function wsPlugin(fastifyInstance) {
       let conversationHistory = [];
       let callStartTime = null;
 
-          // Setup ElevenLabs connection
-          const setupElevenLabs = async () => {
-            try {
-              const scenarioName = customParameters?.scenarioName || 'Random Scenario';
-              console.log(`[ElevenLabs] Getting signed URL for scenario: ${scenarioName}`);
+      // Setup ElevenLabs connection
+      const setupElevenLabs = async () => {
+        try {
+          const scenarioName = customParameters?.scenarioName || 'Random Scenario';
+          console.log(`[ElevenLabs] Getting signed URL for scenario: ${scenarioName}`);
 
-              const signedUrl = await getSignedUrl();
-              console.log(`[ElevenLabs] Signed URL obtained, connecting to WebSocket...`);
-              elevenLabsWs = new WebSocket(signedUrl);
+          const signedUrl = await getSignedUrl();
+          console.log(`[ElevenLabs] Signed URL obtained, connecting to WebSocket...`);
+          elevenLabsWs = new WebSocket(signedUrl);
 
-              elevenLabsWs.on('open', () => {
-                console.log('[ElevenLabs] WebSocket Opened - Connected to Conversational AI');
+          elevenLabsWs.on('open', () => {
+            console.log('[ElevenLabs] WebSocket Opened - Connected to Conversational AI');
 
-                console.log('[ElevenLabs] Sending initiation data with ulaw_8000 output format');
+            console.log('[ElevenLabs] Sending initiation data with ulaw_8000 output format');
 
-                const initialConfig = {
-                  type: 'conversation_initiation_client_data',
-                  conversation_config_override: {
-                    agent: {
-                      prompt: { prompt: customParameters?.prompt || "You are an AI assistant. Please speak in English." },
-                      first_message: customParameters?.first_message || "Hello, how can I help you?"
-                    },
-                    tts: {
-                      output_format: 'ulaw_8000'
-                    }
-                  }
-                };
-                elevenLabsWs.send(JSON.stringify(initialConfig));
-                console.log('[ElevenLabs] Config sent successfully');
-              });
+            const initialConfig = {
+              type: 'conversation_initiation_client_data',
+              conversation_config_override: {
+                agent: {
+                  prompt: { prompt: customParameters?.prompt || "You are an AI assistant. Please speak in English." },
+                  first_message: customParameters?.first_message || "Hello, how can I help you?"
+                },
+                tts: {
+                  output_format: 'ulaw_8000'
+                }
+              }
+            };
+            elevenLabsWs.send(JSON.stringify(initialConfig));
+            console.log('[ElevenLabs] Config sent successfully');
+          });
 
           let audioLogged = false;
           elevenLabsWs.on('message', (data) => {
@@ -284,14 +281,24 @@ fastify.register(async function wsPlugin(fastifyInstance) {
                 if (streamSid) {
                   const payload = message.audio_event?.audio_base_64 || message.audio?.chunk;
                   if (payload) {
-                    const mulawBuffer = Buffer.from(payload, 'base64');
+                    // Decode the base64 PCM audio (16kHz, 16-bit)
+                    const pcmBuffer = Buffer.from(payload, 'base64');
 
                     if (!audioLogged) {
-                      console.log(`[Audio] Received ulaw_8000 buffer: ${mulawBuffer.length} bytes, sending to Twilio...`);
+                      console.log(`[Audio] PCM buffer: ${pcmBuffer.length} bytes (16kHz), downsampling to 8kHz + mulaw...`);
                       audioLogged = true;
                     }
 
-                    // Send in chunks of 320 bytes
+                    // Downsample 16kHz → 8kHz (skip every other sample) + convert to mulaw
+                    const numSamples16k = pcmBuffer.length / 2; // 16-bit = 2 bytes per sample
+                    const numSamples8k = Math.floor(numSamples16k / 2); // half the samples
+                    const mulawBuffer = Buffer.alloc(numSamples8k);
+                    for (let i = 0; i < numSamples8k; i++) {
+                      const sample = pcmBuffer.readInt16LE(i * 4); // skip every other sample (4 bytes apart)
+                      mulawBuffer[i] = pcmToMulaw(sample);
+                    }
+
+                    // Send in chunks of 320 bytes (20ms at 8kHz mulaw)
                     const CHUNK_SIZE = 320;
                     for (let offset = 0; offset < mulawBuffer.length; offset += CHUNK_SIZE) {
                       const chunk = mulawBuffer.subarray(offset, offset + CHUNK_SIZE);
@@ -344,7 +351,7 @@ fastify.register(async function wsPlugin(fastifyInstance) {
             if (elevenLabsWs?.readyState === WebSocket.OPEN) {
               // msg.media.payload is base64 encoded mu-law at 8kHz
               const mulawBuffer = Buffer.from(msg.media.payload, 'base64');
-              
+
               // We want to send 16kHz PCM (16-bit linear).
               // For each 8kHz mu-law sample, we decode to 16-bit, and duplicate it to get 16kHz.
               const pcm16Buffer = Buffer.alloc(mulawBuffer.length * 4);
