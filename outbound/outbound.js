@@ -69,25 +69,25 @@ const RANDOM_SCENARIOS = [
   {
     id: "panic_attack",
     name: "Panic Attack / Hyperventilation",
-    prompt: "You are a young person having a severe panic attack. You are hyperventilating and having trouble speaking clearly. You are at 'Central Park near the fountain'. You feel like you are dying. You are scared and need help immediately. Act very distressed, breathe heavily between words.",
+    prompt: "You are a young person having a severe panic attack. You are hyperventilating and having trouble speaking clearly. You are at 'Central Park near the fountain'. You feel like you are dying. You are scared and need help immediately. Act very distressed, breathe heavily between words. ALWAYS reply in English.",
     first_message: "I... I can't... breathe... help me..."
   },
   {
     id: "witness_fire",
     name: "Witnessing a Fire",
-    prompt: "You are a bystander who just saw a house catch fire at '12 Maple Street'. You are shouting and very urgent. There might be people inside. You are coughing slightly from smoke. You are frantic and want the fire department NOW.",
+    prompt: "You are a bystander who just saw a house catch fire at '12 Maple Street'. You are shouting and very urgent. There might be people inside. You are coughing slightly from smoke. You are frantic and want the fire department NOW. ALWAYS reply in English.",
     first_message: "Fire! There's a fire! 12 Maple Street! Hurry!"
   },
   {
     id: "unconscious_person",
     name: "Found Unconscious Person",
-    prompt: "You are a jogger who found an elderly man unconscious on the sidewalk at '45th Avenue'. He is breathing but not waking up. You are calm but concerned. You don't know who he is. You are following instructions carefully.",
+    prompt: "You are a jogger who found an elderly man unconscious on the sidewalk at '45th Avenue'. He is breathing but not waking up. You are calm but concerned. You don't know who he is. You are following instructions carefully. ALWAYS reply in English.",
     first_message: "Hello? I found a man passed out on the sidewalk. He's not waking up."
   },
   {
     id: "intruder_alert",
     name: "Intruder Alert",
-    prompt: "You are whispering because there is someone in your house. You are hiding in the closet. Address is '500 Oak Lane'. You hear footsteps downstairs. You are terrified and speaking very quietly.",
+    prompt: "You are whispering because there is someone in your house. You are hiding in the closet. Address is '500 Oak Lane'. You hear footsteps downstairs. You are terrified and speaking very quietly. ALWAYS reply in English.",
     first_message: "Shhh... please... there's someone in my house..."
   }
 ];
@@ -205,6 +205,38 @@ fastify.register(async function wsPlugin(fastifyInstance) {
 
       socket.on('error', (err) => console.error('[WS] Error:', err));
 
+      // PCM 16-bit linear to mulaw conversion function
+      function pcmToMulaw(sample) {
+        const MULAW_MAX = 0x1FFF;
+        const MULAW_BIAS = 33;
+        let sign = (sample >> 8) & 0x80;
+        if (sign !== 0) sample = -sample;
+        sample = sample + MULAW_BIAS;
+        if (sample > MULAW_MAX) sample = MULAW_MAX;
+
+        let exponent = 7;
+        let mask = 0x1000;
+        for (let i = 7; i > 0; i--) {
+          if (sample >= mask) { exponent = i; break; }
+          mask >>= 1;
+          if (i === 1) exponent = 0;
+        }
+        const mantissa = (sample >> (exponent + 3)) & 0x0F;
+        const mulaw = ~(sign | (exponent << 4) | mantissa);
+        return mulaw & 0xFF;
+      }
+
+      // Build mu-Law to PCM16 table
+      const muLawToPcm16 = new Int16Array(256);
+      for (let i = 0; i < 256; i++) {
+        let mu = ~i & 0xff;
+        let sign = (mu & 0x80) ? -1 : 1;
+        let exponent = (mu & 0x70) >> 4;
+        let data = mu & 0x0f;
+        let pcm = sign * (((data << 3) + 0x84) << exponent) - 132;
+        muLawToPcm16[i] = pcm;
+      }
+
       // Variables to track the call
       let streamSid = null;
       let callSid = null;
@@ -213,53 +245,36 @@ fastify.register(async function wsPlugin(fastifyInstance) {
       let conversationHistory = [];
       let callStartTime = null;
 
-      // Set up ElevenLabs connection
-      const setupElevenLabs = async () => {
-        try {
-          const scenarioName = customParameters?.scenarioName || 'Random Scenario';
-          console.log(`[ElevenLabs] Getting signed URL for scenario: ${scenarioName}`);
+          // Setup ElevenLabs connection
+          const setupElevenLabs = async () => {
+            try {
+              const scenarioName = customParameters?.scenarioName || 'Random Scenario';
+              console.log(`[ElevenLabs] Getting signed URL for scenario: ${scenarioName}`);
 
-          const signedUrl = await getSignedUrl();
-          console.log(`[ElevenLabs] Signed URL obtained, connecting to WebSocket...`);
-          elevenLabsWs = new WebSocket(signedUrl);
+              const signedUrl = await getSignedUrl();
+              console.log(`[ElevenLabs] Signed URL obtained, connecting to WebSocket...`);
+              elevenLabsWs = new WebSocket(signedUrl);
 
-          elevenLabsWs.on('open', () => {
-            console.log('[ElevenLabs] WebSocket Opened - Connected to Conversational AI');
+              elevenLabsWs.on('open', () => {
+                console.log('[ElevenLabs] WebSocket Opened - Connected to Conversational AI');
 
-            console.log('[ElevenLabs] Sending initiation data with ulaw_8000 output format');
+                console.log('[ElevenLabs] Sending initiation data with ulaw_8000 output format');
 
-            const initialConfig = {
-              type: 'conversation_initiation_client_data',
-              conversation_config_override: {
-                tts: {
-                  output_format: 'ulaw_8000'
-                }
-              }
-            };
-            elevenLabsWs.send(JSON.stringify(initialConfig));
-            console.log('[ElevenLabs] Config sent successfully');
-          });
-
-          // PCM 16-bit linear to mulaw conversion function
-          function pcmToMulaw(sample) {
-            const MULAW_MAX = 0x1FFF;
-            const MULAW_BIAS = 33;
-            let sign = (sample >> 8) & 0x80;
-            if (sign !== 0) sample = -sample;
-            sample = sample + MULAW_BIAS;
-            if (sample > MULAW_MAX) sample = MULAW_MAX;
-
-            let exponent = 7;
-            let mask = 0x1000;
-            for (let i = 7; i > 0; i--) {
-              if (sample >= mask) { exponent = i; break; }
-              mask >>= 1;
-              if (i === 1) exponent = 0;
-            }
-            const mantissa = (sample >> (exponent + 3)) & 0x0F;
-            const mulaw = ~(sign | (exponent << 4) | mantissa);
-            return mulaw & 0xFF;
-          }
+                const initialConfig = {
+                  type: 'conversation_initiation_client_data',
+                  conversation_config_override: {
+                    agent: {
+                      prompt: { prompt: customParameters?.prompt || "You are an AI assistant. Please speak in English." },
+                      first_message: customParameters?.first_message || "Hello, how can I help you?"
+                    },
+                    tts: {
+                      output_format: 'ulaw_8000'
+                    }
+                  }
+                };
+                elevenLabsWs.send(JSON.stringify(initialConfig));
+                console.log('[ElevenLabs] Config sent successfully');
+              });
 
           let audioLogged = false;
           elevenLabsWs.on('message', (data) => {
@@ -337,8 +352,21 @@ fastify.register(async function wsPlugin(fastifyInstance) {
             setupElevenLabs();
           } else if (msg.event === 'media') {
             if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+              // msg.media.payload is base64 encoded mu-law at 8kHz
+              const mulawBuffer = Buffer.from(msg.media.payload, 'base64');
+              
+              // We want to send 16kHz PCM (16-bit linear).
+              // For each 8kHz mu-law sample, we decode to 16-bit, and duplicate it to get 16kHz.
+              const pcm16Buffer = Buffer.alloc(mulawBuffer.length * 4);
+              for (let i = 0; i < mulawBuffer.length; i++) {
+                const pcm = muLawToPcm16[mulawBuffer[i]];
+                // Duplicate to upsample 8kHz -> 16kHz
+                pcm16Buffer.writeInt16LE(pcm, i * 4);
+                pcm16Buffer.writeInt16LE(pcm, i * 4 + 2);
+              }
+
               elevenLabsWs.send(JSON.stringify({
-                user_audio_chunk: msg.media.payload
+                user_audio_chunk: pcm16Buffer.toString('base64')
               }));
             }
           } else if (msg.event === 'stop') {
@@ -361,11 +389,10 @@ fastify.register(async function wsPlugin(fastifyInstance) {
 
 // Update the analyzeConversation function to include transcript in the analysis prompt
 async function analyzeConversation(callSid, conversationHistory, parameters) {
-  try {
-    const parsedScenarioId = parameters?.scenarioId || null;
+  let scenarioName = parameters?.scenarioName || "Random Emergency Scenario";
+  const parsedScenarioId = parameters?.scenarioId || null;
 
-    // Better scenario name extraction
-    let scenarioName = parameters?.scenarioName || "Random Emergency Scenario";
+  try {
     const promptText = parameters?.prompt || '';
 
     // Fallback: If no name passed, try to guess (legacy support)
@@ -477,7 +504,7 @@ DO NOT include any explanatory text, markdown formatting, or code blocks - retur
 
     // Call OpenAI API
     const response = await openai.chat.completions.create({
-      model: "gpt-4-turbo",
+      model: "gpt-3.5-turbo",
       messages: messages,
       temperature: 0.7,
       max_tokens: 1500
