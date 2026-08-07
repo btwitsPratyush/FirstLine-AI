@@ -7,7 +7,7 @@
 
 ---
 
-## Screenshots:-
+## Screenshots:
 
 ### UI — Training flow
 
